@@ -1,4 +1,5 @@
 from os import environ
+from sys import exit as closewindow
 import math
 import pygame
 
@@ -6,9 +7,52 @@ import pygame
 SIZE = 650
 FUNC_MOVE = 5
 FRAME_RATE = 30
-M = MODE = ('N' if open('./Default Mode.txt', 'r').read().startswith('N') else 'T') + '.png'
-MM = MUSIC_MODE = MODE.split('.')[0] + '.mp3'
+
+MODE, IM, IMAGE_MODE, MM, MUSIC_MODE = None, None, None, None, None
+
+
+def initmode(invert=True):
+	global MODE, IM, IMAGE_MODE, MM, MUSIC_MODE
+
+	if invert:
+		MODE = 'N' if MODE == 'T' else 'T'
+	else:
+		MODE = 'N' if open('./Default Mode.txt', 'r').read().startswith('N') else 'T'
+	IM = IMAGE_MODE = MODE + '.png'
+	MM = MUSIC_MODE = MODE + '.mp3'
+
+
+initmode(False)
 environ['SDL_VIDEO_WINDOW_POS'] = '15,35'
+
+SP = SPRITES = None
+
+def initsprites():
+	global SP, SPRITES
+
+	def im(link):
+		return pygame.image.load(link)
+
+	SP = SPRITES = {'mainmenu': im('sprites/MainMenu' + IM), 'start': im('sprites/Start' + IM),
+	                'quit': im('sprites/Quit' + IM), 'backtomenu': im('sprites/MenuBack' + IM),
+	                'levelselect': im('sprites/Levels' + IM), 'mode': im('sprites/Mode' + IM),
+	                'lvls': dict([(i, im('sprites/Level' + str(i) + IM)) for i in range(1, 11)]),
+	                'y': im('sprites/Y' + IM), 'yes': im('sprites/Confirm' + IM),
+	                'form': im('sprites/Formula' + IM), 'none': im('sprites/None.png')}
+
+
+initsprites()
+
+MU = MUSIC = None
+
+
+def initmusic():
+	global MU, MUSIC
+
+	MU = MUSIC = {'mainmenu': 'sound/MainMenu' + MM, 'levelselect': 'sound/LevelSelect' + MM}
+
+
+initmusic()
 
 
 def sign(num):
@@ -190,7 +234,7 @@ class Goal:
 class Player:
 	def __init__(self, x, y, width, height, sprite, surface, level):
 		self.obst = Obstacle(x, y, width, height, sprite, surface)
-		self.on_func, self.level, self.grab = None, level, None
+		self.state, self.level, self.grab = 'none', level, None
 
 	def draw(self):
 		self.obst.draw()
@@ -233,58 +277,111 @@ class Player:
 	def is_clipping(self):
 		return any(list(self.clip().values()))
 
-	def funcmove(self, func):
+	def funcmove(self, func, afterfunc, *args, **kwargs):
+		if self.state == 'none':
+			return
+
 		def windowed(num1, num2):
 			return game.cpl.on_pygame(num1, num2)
 
 		def planed(num1, num2):
 			return game.cpl.on_plane(num1, num2)
 
-		if self.on_func is None:
+		if self.state == 'func_search':
 			for i in range(int(self.obst.x), int(self.obst.x) + int(self.obst.w) + 1):
 			    self.grab = Position(i - self.obst.x, windowed(None, func(planed(i, None)[0]))[1])
 			    if self.obst.y <= self.grab.y <= self.obst.y + self.obst.h:
 			    	self.grab.y -= self.obst.y
-			    	self.on_func = True
+			    	self.state = 'on_func'
 			    	break
-		if self.on_func is True and not self.is_clipping() and not self.level.goal_reached():
+		if self.state == 'on_func' and not self.is_clipping() and not self.level.goal_reached():
 			self.move('r', FUNC_MOVE)
 			value = windowed(None, func(planed(self.obst.x + self.grab.x + FUNC_MOVE, None)[0]))[1]
 			self.move('u', self.obst.y - (value - self.grab.y))
-		if self.on_func is True and self.level.goal_reached():
-			pygame.mixer.music.load('sound/WinT.mp3')
-			pygame.mixer.music.play()
-			self.on_func = False
-		if self.on_func is True and self.is_clipping():
-			print('You suck!')
-			self.on_func = False
+		if self.level.goal_reached():
+			self.state = 'goal_reached'
+			afterfunc(*args, **kwargs)
+		if self.is_clipping():
+			self.state = 'none'
+			game.clipped()
 
 
 class Game:
 	def __init__(self, size_x, size_y, caption, icon):
-		self.SIZE = Position(size_x, size_y)
-		self.main = pygame.display.set_mode((self.SIZE.x, self.SIZE.y))
-		pygame.display.set_caption(caption)
-		pygame.display.set_icon(pygame.image.load('sprites/' + icon))
-		self.clock = pygame.time.Clock()
-		self.run = True
-		self.cpl = None
 		self.held = False
-		pygame.mixer.init()
+		self.SIZE = Position(size_x, size_y)
+		self.cpl, self.icon, self.caption = None, icon, caption
+		self.main = pygame.display.set_mode((self.SIZE.x, self.SIZE.y))
+
+	def toLvlSelect(self, _):
+		self.showmenu(self.levelselect, 'levelselect', True)
+
+	def changeMode(self, _):
+		self.run = False
+		self.flags['change'] = True
+
+	def quit(self, _):
+		self.run = False
+
+	def toMainMenu(self, _):
+		self.showmenu(self.mainmenu, 'mainmenu', True)
+
+	def toLevel(self, number):
+		print(number)
+
+	def showmenu(self, menu, music, type):
+		pygame.mixer.music.stop()
+		self.flags['music'] = (music, type)
+		menu.show()
+		for othermenu in self.menus:
+			if othermenu is not menu:
+				othermenu.hide()
 
 	def setup(self):
+		pygame.display.set_caption(self.caption)
+		pygame.display.set_icon(pygame.image.load(self.icon))
+		pygame.mixer.init()
+		self.clock = pygame.time.Clock()
+		self.run = True
 		self.main.fill((255, 255, 255))
-		self.obsts = [Sprite(game.main, pygame.image.load('sprites/MainMenuT.png'), 0, 0),
-		              Obstacle(-50, -200, 200, 100, pygame.image.load('sprites/Level1' + M), game.main),
-		              Obstacle(-500, -250, 200, 100, pygame.image.load('sprites/Level3' + M), game.main)]
-		self.level = Level(*self.obsts)
-		self.goal = Goal(SIZE - 200, SIZE - 200, 200, 100, pygame.image.load('sprites/Level5' + M), game.main, self.level)
-		self.player = Player(0, 0, 200, 100, pygame.image.load('sprites/Level5' + M), game.main, self.level)
-		self.effects = None
-
+		objects = [Button(225, 150, 200, 100, SP['start'], self.main, self.toLvlSelect, None),
+		           Button(225, 300, 200, 100, SP['mode'], self.main, self.changeMode, None),
+		           Button(225, 450, 200, 100, SP['quit'], self.main, self.quit, None)]
+		self.mainmenu = Menu(self.main, SP['mainmenu'], *objects[:])
+		self.mainmenu.show()
+		objects = ([Button(25, 105 * i + 5, 200, 100, SP['lvls'][i + 1], self.main, 
+			        self.toLevel, i + 1) for i in range(5)] + 
+		           [Button(425, 105 * (i - 5) + 5, 200, 100, SP['lvls'][i + 1], self.main, 
+			        self.toLevel, i + 1) for i in range(5, 10)] +
+		           [Button(225, 530, 200, 100, SP['backtomenu'], self.main, self.toMainMenu, None)])
+		self.levelselect = Menu(self.main, SP['levelselect'], *objects[:])
+		objects = [Sprite(self.main, SP['y'], 0, 550),
+		           Button(100, 550, 450, 100, SP['form'], self.main, print, 'Formula'),
+		           Button(550, 550, 100, 100, SP['yes'], self.main, print, 'Confirm')]
+		self.formula = Menu(self.main, SP['none'], *objects[:])
+		self.formula.show()
+		# self.obsts = [Sprite(game.main, pygame.image.load('sprites/MainMenuT.png'), 0, 0),
+		#               Obstacle(-50, -200, 200, 100, pygame.image.load('sprites/Level1' + M), game.main),
+		#               Obstacle(-500, -250, 200, 100, pygame.image.load('sprites/Level3' + M), game.main)]
+		# self.level = Level(*self.obsts)
+		# self.goal = Goal(SIZE - 200, SIZE - 200, 200, 100, pygame.image.load('sprites/Level5' + M), game.main, self.level)
+		# self.player = Player(0, 0, 200, 100, pygame.image.load('sprites/Level5' + M), game.main, self.level)
+		# self.player.state = 'func_search'
+		self.flags = {'music': ('mainmenu', True), 'change': False, 'drawcoords': False}
+		self.menus = [self.mainmenu, self.levelselect, self.formula]
 
 	def after(self):
-		pass
+		pygame.mixer.music.stop()
+		if self.flags['change']:
+			initmode()
+			initsprites()
+			initmusic()
+			self.mainloop()
+		else:
+			print('Window Closed')
+
+	def set_flag(self, key, value):
+		self.flags[key] = value
 
 	def mainloop(self):
 		self.setup()
@@ -294,38 +391,36 @@ class Game:
 				if event.type == pygame.QUIT:
 					self.run = False
 
-			self.level.draw()
-			self.cpl.draw_plane()
-			self.cpl.draw_function(lambda x: x * x * -0.005 + SIZE)
-			self.player.draw()
-			self.goal.draw()
+			if self.flags['music'][1] is True:
+				if not pygame.mixer.music.get_busy():
+					track = MU[self.flags['music'][0]]
+					pygame.mixer.music.load(track)
+					pygame.mixer.music.play()
+			else:
+				if self.flags['music'][1] is False:
+					track = MU[self.flags['music'][0]]
+					pygame.mixer.music.load(track)
+					pygame.mixer.music.play()
+					self.flags['music'][1] = 'played'
 
-			if self.player.on_func is False:
-				if self.effects is None:
-					self.effects = 0
-				else:
-					self.effects += 5
-				pygame.draw.rect(self.player.obst.sr, (255, 255, 255), (0, 0, self.effects, SIZE))
-				pygame.draw.rect(self.player.obst.sr, (255, 255, 255), (SIZE - self.effects, 0, self.effects, SIZE))
+			for menu in self.menus:
+				menu.draw()
 
-			self.player.funcmove(lambda x: x * x * -0.005 + SIZE)
-			
 			if pygame.mouse.get_pressed()[0]:
 				if not self.held:
 					self.held = True
-
-					pass
+					for menu in self.menus:
+						menu.react()
 			else:
 				self.held = False
 
 			pygame.display.update()
-
 		self.after()
 		pygame.quit()
 
 
 if __name__ == '__main__':
 	pygame.init()
-	game = Game(SIZE, SIZE, 'Supra Mairo Functions', 'Icon' + M)
+	game = Game(SIZE, SIZE, 'Supra Mairo Functions', 'sprites/Icon' + IM)
 	game.cpl = CoordsPlane(game.main, 0, SIZE)
 	game.mainloop()
