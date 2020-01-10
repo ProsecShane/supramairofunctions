@@ -36,9 +36,15 @@ def initsprites():
 	SP = SPRITES = {'mainmenu': im('sprites/MainMenu' + IM), 'start': im('sprites/Start' + IM),
 	                'quit': im('sprites/Quit' + IM), 'backtomenu': im('sprites/MenuBack' + IM),
 	                'levelselect': im('sprites/Levels' + IM), 'mode': im('sprites/Mode' + IM),
-	                'lvls': dict([(i, im('sprites/Level' + str(i) + IM)) for i in range(1, 11)]),
+	                'lvlBtn': dict([(i, im('sprites/Level' + str(i) + IM)) for i in range(1, 11)]),
 	                'y': im('sprites/Y' + IM), 'yes': im('sprites/Confirm' + IM),
-	                'form': im('sprites/Formula' + IM), 'none': im('sprites/None.png')}
+	                'form': im('sprites/Formula' + IM), 'none': im('sprites/None.png'),
+	                'goal': im('sprites/Goal' + IM), 'plyStd': im('sprites/PlayerStand' + IM),
+	                'plyGo': im('sprites/PlayerGo' + IM), 'back': im('sprites/Back' + IM),
+	                'lvlBg': dict([(i, im('sprites/Level' + str(i) + 'Bg' + IM)) 
+	                	           for i in range(1, 11)]),
+	                'lvlBlock': dict([(i, im('sprites/Level' + str(i) + 'Block' + IM)) 
+	                	              for i in range(1, 11)]),}
 
 
 initsprites()
@@ -49,7 +55,9 @@ MU = MUSIC = None
 def initmusic():
 	global MU, MUSIC
 
-	MU = MUSIC = {'mainmenu': 'sound/MainMenu' + MM, 'levelselect': 'sound/LevelSelect' + MM}
+	MU = MUSIC = {'mainmenu': './sound/MainMenu' + MM, 'levelselect': 'sound/LevelSelect' + MM,
+	              'bump': 'sound/Bump' + MODE + '.ogg', 'win': 'sound/Win' + MM,
+	              'level': dict([(i, 'sound/Level' + str(i) + MM) for i in range(1, 11)])}
 
 
 initmusic()
@@ -57,6 +65,12 @@ initmusic()
 
 def sign(num):
 	return -1 if num < 0 else 1
+
+
+def interp(func, eval_=True):
+	func = func.replace('^', '**')
+	pass
+	return eval(func) if eval_ else func
 
 
 class Position:
@@ -211,9 +225,17 @@ class Menu:
 
 class Level:
 	def __init__(self, *objects):
-		self.objects, self.goal = list(objects), None
+		self.objects, self.goal, self.shown = list(objects), None, False
+
+	def show(self):
+		self.shown = True
+
+	def hide(self):
+		self.shown = False
 
 	def draw(self):
+		if not self.shown:
+			return
 		for obj in self.objects:
 			obj.draw()
 
@@ -226,6 +248,7 @@ class Goal:
 		self.obst = Obstacle(x, y, width, height, sprite, surface)
 		self.level = level
 		self.level.goal = (x, y, width, height)
+		self.level.objects.append(Sprite(surface, sprite, x, y))
 
 	def draw(self):
 		self.obst.draw()
@@ -264,14 +287,6 @@ class Player:
 							res['r'] = True
 				if all(list(res.values())):
 					break
-		if self.obst.x < 0:
-			res['l'] = True
-		if self.obst.x + self.obst.w >= SIZE:
-			res['r'] = True
-		if self.obst.y < 0:
-			res['u'] = True
-		if self.obst.y + self.obst.h >= SIZE:
-			res['d'] = True
 		return res
 
 	def is_clipping(self):
@@ -281,28 +296,29 @@ class Player:
 		if self.state == 'none':
 			return
 
-		def windowed(num1, num2):
-			return game.cpl.on_pygame(num1, num2)
-
-		def planed(num1, num2):
-			return game.cpl.on_plane(num1, num2)
-
 		if self.state == 'func_search':
 			for i in range(int(self.obst.x), int(self.obst.x) + int(self.obst.w) + 1):
-			    self.grab = Position(i - self.obst.x, windowed(None, func(planed(i, None)[0]))[1])
-			    if self.obst.y <= self.grab.y <= self.obst.y + self.obst.h:
-			    	self.grab.y -= self.obst.y
-			    	self.state = 'on_func'
-			    	break
+				self.grab = game.cpl.xy_to_pos(i, func(i))
+				if self.obst.y <= self.grab.y <= self.obst.y + self.obst.h:
+					self.grab.y -= self.obst.y
+					self.state = 'on_func'
+					self.obst.h = 85
+					self.obst.sp = SP['plyGo']
+					break
 		if self.state == 'on_func' and not self.is_clipping() and not self.level.goal_reached():
+			# value = windowed(None, func(planed(self.obst.x + self.grab.x + FUNC_MOVE, None)[0]))[1]
+			value = game.cpl.xy_to_pos(0, func(self.obst.x + self.grab.x + FUNC_MOVE))
 			self.move('r', FUNC_MOVE)
-			value = windowed(None, func(planed(self.obst.x + self.grab.x + FUNC_MOVE, None)[0]))[1]
-			self.move('u', self.obst.y - (value - self.grab.y))
+			self.move('u', self.obst.y - (value.y - self.grab.y) + 15)
 		if self.level.goal_reached():
 			self.state = 'goal_reached'
+			self.obst.h = 100
+			self.obst.sp = SP['plyStd']
 			afterfunc(*args, **kwargs)
 		if self.is_clipping():
 			self.state = 'none'
+			self.obst.h = 100
+			self.obst.sp = SP['plyStd']
 			game.clipped()
 
 
@@ -314,7 +330,22 @@ class Game:
 		self.main = pygame.display.set_mode((self.SIZE.x, self.SIZE.y))
 
 	def toLvlSelect(self, _):
-		self.showmenu(self.levelselect, 'levelselect', True)
+		self.showmenu(self.levelselect, MU['levelselect'], True)
+		for level in self.levels:
+			level.hide()
+		self.flags['in_lvl'] = False
+		self.player.level = self.nonlevel
+		self.player.obst.x, self.player.obst.y = self.defCoords[0]
+		self.player.state = 'none'
+		self.player.obst.h = 100
+		self.player.obst.sp = SP['plyStd']
+
+	def clipped(self):
+		pygame.mixer.Channel(1).play(self.bump)
+		self.player.obst.x, self.player.obst.y = self.defCoords[self.flags['in_lvl']]
+		self.player.state = 'none'
+		self.player.obst.h = 100
+		self.player.obst.sp = SP['plyStd']
 
 	def changeMode(self, _):
 		self.run = False
@@ -324,51 +355,133 @@ class Game:
 		self.run = False
 
 	def toMainMenu(self, _):
-		self.showmenu(self.mainmenu, 'mainmenu', True)
+		self.showmenu(self.mainmenu, MU['mainmenu'], True)
 
 	def toLevel(self, number):
-		print(number)
+		self.levelbg.bg = SP['lvlBg'][number]
+		self.showmenu(self.formula, MU['level'][number], True)
+		self.levelbg.shown = True
+		self.showlevel(number)
+		self.flags['in_lvl'] = number
+		self.player.level = self.levels[number - 1]
+		self.player.obst.x, self.player.obst.y = self.defCoords[number]
+		self.player.state = 'none'
+		self.player.obst.h = 100
+		self.player.obst.sp = SP['plyStd']
+
+	def showlevel(self, number):
+		self.levels[number - 1].show()
+		for otherlevel in self.levels:
+			if otherlevel is not self.levels[number - 1]:
+				otherlevel.hide()
 
 	def showmenu(self, menu, music, type):
 		pygame.mixer.music.stop()
-		self.flags['music'] = (music, type)
+		self.flags['music'] = [music, type]
 		menu.show()
 		for othermenu in self.menus:
 			if othermenu is not menu:
 				othermenu.hide()
 
+	def player_move(self, _):
+		self.player.state = 'func_search'
+
 	def setup(self):
 		pygame.display.set_caption(self.caption)
 		pygame.display.set_icon(pygame.image.load(self.icon))
 		pygame.mixer.init()
+
+		self.bump = pygame.mixer.Sound(MU['bump'])
+
 		self.clock = pygame.time.Clock()
 		self.run = True
 		self.main.fill((255, 255, 255))
+
 		objects = [Button(225, 150, 200, 100, SP['start'], self.main, self.toLvlSelect, None),
 		           Button(225, 300, 200, 100, SP['mode'], self.main, self.changeMode, None),
 		           Button(225, 450, 200, 100, SP['quit'], self.main, self.quit, None)]
 		self.mainmenu = Menu(self.main, SP['mainmenu'], *objects[:])
 		self.mainmenu.show()
-		objects = ([Button(25, 105 * i + 5, 200, 100, SP['lvls'][i + 1], self.main, 
+
+		objects = ([Button(25, 105 * i + 5, 200, 100, SP['lvlBtn'][i + 1], self.main, 
 			        self.toLevel, i + 1) for i in range(5)] + 
-		           [Button(425, 105 * (i - 5) + 5, 200, 100, SP['lvls'][i + 1], self.main, 
+		           [Button(425, 105 * (i - 5) + 5, 200, 100, SP['lvlBtn'][i + 1], self.main, 
 			        self.toLevel, i + 1) for i in range(5, 10)] +
 		           [Button(225, 530, 200, 100, SP['backtomenu'], self.main, self.toMainMenu, None)])
 		self.levelselect = Menu(self.main, SP['levelselect'], *objects[:])
+
+		self.levelbg = Menu(self.main, SP['none'], Sprite(self.main, SP['none'], 0, 0))
+
 		objects = [Sprite(self.main, SP['y'], 0, 550),
-		           Button(100, 550, 450, 100, SP['form'], self.main, print, 'Formula'),
-		           Button(550, 550, 100, 100, SP['yes'], self.main, print, 'Confirm')]
+		           Sprite(self.main, SP['form'], 100, 550),
+		           Button(550, 550, 100, 100, SP['yes'], self.main, self.player_move, None),
+		           Button(SIZE - 50, 0, 50, 50, SP['back'], self.main, self.toLvlSelect, None)]
 		self.formula = Menu(self.main, SP['none'], *objects[:])
-		self.formula.show()
-		# self.obsts = [Sprite(game.main, pygame.image.load('sprites/MainMenuT.png'), 0, 0),
-		#               Obstacle(-50, -200, 200, 100, pygame.image.load('sprites/Level1' + M), game.main),
-		#               Obstacle(-500, -250, 200, 100, pygame.image.load('sprites/Level3' + M), game.main)]
-		# self.level = Level(*self.obsts)
-		# self.goal = Goal(SIZE - 200, SIZE - 200, 200, 100, pygame.image.load('sprites/Level5' + M), game.main, self.level)
-		# self.player = Player(0, 0, 200, 100, pygame.image.load('sprites/Level5' + M), game.main, self.level)
-		# self.player.state = 'func_search'
-		self.flags = {'music': ('mainmenu', True), 'change': False, 'drawcoords': False}
-		self.menus = [self.mainmenu, self.levelselect, self.formula]
+
+		objects = [Obstacle(0, 0, 26, 26, SP['lvlBlock'][1], self.main),
+		           Obstacle(0, 26, 26, 26, SP['lvlBlock'][1], self.main),
+		           Obstacle(400, 300, 26, 26, SP['lvlBlock'][1], self.main)]
+		self.level1 = Level(*objects[:])
+		self.level1goal = Goal(600, 300, 50, 50, SP['goal'], self.main, self.level1)
+
+		objects = [Obstacle(0, 0, 26, 26, SP['lvlBlock'][2], self.main),
+		           Obstacle(0, 26, 26, 26, SP['lvlBlock'][2], self.main)]
+		self.level2 = Level(*objects[:])
+		self.level2goal = Goal(600, 300, 50, 50, SP['goal'], self.main, self.level2)
+
+		objects = [Obstacle(0, 0, 26, 26, SP['lvlBlock'][3], self.main),
+		           Obstacle(0, 26, 26, 26, SP['lvlBlock'][3], self.main)]
+		self.level3 = Level(*objects[:])
+		self.level3goal = Goal(600, 300, 50, 50, SP['goal'], self.main, self.level3)
+
+		objects = [Obstacle(0, 0, 26, 26, SP['lvlBlock'][4], self.main),
+		           Obstacle(0, 26, 26, 26, SP['lvlBlock'][4], self.main)]
+		self.level4 = Level(*objects[:])
+		self.level4goal = Goal(600, 300, 50, 50, SP['goal'], self.main, self.level4)
+
+		objects = [Obstacle(0, 0, 26, 26, SP['lvlBlock'][5], self.main),
+		           Obstacle(0, 26, 26, 26, SP['lvlBlock'][5], self.main)]
+		self.level5 = Level(*objects[:])
+		self.level5goal = Goal(600, 300, 50, 50, SP['goal'], self.main, self.level5)
+
+		objects = [Obstacle(0, 0, 26, 26, SP['lvlBlock'][6], self.main),
+		           Obstacle(0, 26, 26, 26, SP['lvlBlock'][6], self.main)]
+		self.level6 = Level(*objects[:])
+		self.level6goal = Goal(600, 300, 50, 50, SP['goal'], self.main, self.level6)
+
+		objects = [Obstacle(0, 0, 26, 26, SP['lvlBlock'][7], self.main),
+		           Obstacle(0, 26, 26, 26, SP['lvlBlock'][7], self.main)]
+		self.level7 = Level(*objects[:])
+		self.level7goal = Goal(600, 300, 50, 50, SP['goal'], self.main, self.level7)
+
+		objects = [Obstacle(0, 0, 26, 26, SP['lvlBlock'][8], self.main),
+		           Obstacle(0, 26, 26, 26, SP['lvlBlock'][8], self.main)]
+		self.level8 = Level(*objects[:])
+		self.level8goal = Goal(600, 300, 50, 50, SP['goal'], self.main, self.level8)
+
+		objects = [Obstacle(0, 0, 26, 26, SP['lvlBlock'][9], self.main),
+		           Obstacle(0, 26, 26, 26, SP['lvlBlock'][9], self.main)]
+		self.level9 = Level(*objects[:])
+		self.level9goal = Goal(600, 300, 50, 50, SP['goal'], self.main, self.level9)
+
+		objects = [Obstacle(0, 0, 26, 26, SP['lvlBlock'][10], self.main),
+		           Obstacle(0, 26, 26, 26, SP['lvlBlock'][10], self.main)]
+		self.level10 = Level(*objects[:])
+		self.level10goal = Goal(600, 300, 50, 50, SP['goal'], self.main, self.level10)
+
+		self.nonlevel = Level(Obstacle(10000, 10000, 1, 1, SP['none'], self.main))
+		self.nongoal = Goal(1000000, 1000000, 1, 1, SP['none'], self.main, self.nonlevel)
+
+		self.defCoords = {1: (200, 200), 2: (200, 200), 3: (200, 200), 4: (200, 200), 
+		                  5: (200, 200), 6: (200, 200), 7: (200, 200), 8: (200, 200), 
+		                  9: (200, 200), 10: (200, 200), 0: (-10000, -10000)}
+
+		self.player = Player(-10000, -10000, 50, 100, SP['plyStd'], self.main, self.nonlevel)
+
+		self.flags = {'music': [MU['mainmenu'], True], 'change': False, 'in_lvl': False}
+		self.levels = [self.level1, self.level2, self.level3, self.level4, self.level5, 
+		               self.level6, self.level7, self.level8, self.level9, self.level10]
+		self.menus = [self.mainmenu, self.levelselect, self.formula, self.levelbg]
 
 	def after(self):
 		pygame.mixer.music.stop()
@@ -383,6 +496,24 @@ class Game:
 	def set_flag(self, key, value):
 		self.flags[key] = value
 
+	def win_anim(self, _):
+		pygame.mixer.music.stop()
+		pygame.mixer.music.load(MU['win'])
+		pygame.mixer.music.play()
+		i = 1
+		while pygame.mixer.music.get_busy() and self.run:
+			for event in pygame.event.get():
+				if event.type == pygame.QUIT:
+					self.run = False
+			self.clock.tick(FRAME_RATE)
+			leng = FUNC_MOVE * i
+			pygame.draw.rect(self.main, (255, 255, 255), (0, 0, leng, SIZE))
+			pygame.draw.rect(self.main, (255, 255, 255), (SIZE - leng, 0, leng, SIZE))
+			pygame.display.update()
+			i += 1
+		self.toLvlSelect(None)
+		self.player.state = 'none'
+
 	def mainloop(self):
 		self.setup()
 		while self.run:
@@ -391,20 +522,30 @@ class Game:
 				if event.type == pygame.QUIT:
 					self.run = False
 
-			if self.flags['music'][1] is True:
+			self.player.funcmove(lambda x: 300 - x / 7, self.win_anim, None)
+
+			if self.flags['music'][1] in [True, 'loaded']:
+				if self.flags['music'][1] is True:
+					pygame.mixer.music.load(self.flags['music'][0])
+					self.flags['music'][1] = 'loaded'
 				if not pygame.mixer.music.get_busy():
-					track = MU[self.flags['music'][0]]
-					pygame.mixer.music.load(track)
 					pygame.mixer.music.play()
 			else:
 				if self.flags['music'][1] is False:
-					track = MU[self.flags['music'][0]]
-					pygame.mixer.music.load(track)
+					pygame.mixer.music.load(self.flags['music'][0])
 					pygame.mixer.music.play()
 					self.flags['music'][1] = 'played'
 
-			for menu in self.menus:
-				menu.draw()
+			if self.flags['in_lvl']:
+				self.levelbg.draw()
+				for level in self.levels:
+				    level.draw()
+				self.cpl.draw_plane()
+				self.cpl.draw_function(lambda x: 300 - x / 7)
+				self.formula.draw()
+			else:
+				for menu in self.menus:
+				     menu.draw()
 
 			if pygame.mouse.get_pressed()[0]:
 				if not self.held:
@@ -414,6 +555,9 @@ class Game:
 			else:
 				self.held = False
 
+			if self.flags['in_lvl']:
+				self.player.draw()
+
 			pygame.display.update()
 		self.after()
 		pygame.quit()
@@ -422,5 +566,5 @@ class Game:
 if __name__ == '__main__':
 	pygame.init()
 	game = Game(SIZE, SIZE, 'Supra Mairo Functions', 'sprites/Icon' + IM)
-	game.cpl = CoordsPlane(game.main, 0, SIZE)
+	game.cpl = CoordsPlane(game.main, 0, SIZE - 100)
 	game.mainloop()
